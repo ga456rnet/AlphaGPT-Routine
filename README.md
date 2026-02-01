@@ -1,6 +1,6 @@
-# AlphaGPT-AStock
+# AlphaGPT-Routine
 
-AlphaGPT-AStock is an automated quantitative strategy discovery and execution tool for the A-share market. It utilizes a Transformer-based model (AlphaGPT) to discover and optimize mathematical alpha formulas using Polish Notation, verifies them against historical data, and provides daily trading signals via DingTalk.
+AlphaGPT-Routine is an automated quantitative strategy discovery and execution tool for the A-share market. It utilizes a Transformer-based model (AlphaGPT) to discover and optimize mathematical alpha formulas using Polish Notation, verifies them against historical data, and provides daily trading signals via DingTalk.
 
 ## 🚀 Key Features
 

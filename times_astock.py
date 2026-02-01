@@ -613,9 +613,9 @@ class DeepQuantMiner:
         return _parse()
 
 def final_reality_check(miner, engine):
-    print("\n" + "="*60)
+    print("\n" + "="*30)
     print("FINAL REALITY CHECK (Out-of-Sample)")
-    print("="*60)
+    print("="*30)
 
     formula_str = miner.decode()
     if miner.best_formula_tokens is None: 
@@ -761,9 +761,9 @@ def show_latest_positions(miner, engine, n_days=5):
         print(msg)
         output_lines.append(msg)
 
-    log_print("\n" + "="*60)
+    log_print("\n" + "="*30)
     log_print(f"Latest {n_days} Trading Days Position Info")
-    log_print("="*60)
+    log_print("="*30)
     
     if miner.best_formula_tokens is None:
         log_print("No valid formula available")
@@ -925,7 +925,7 @@ def show_latest_positions(miner, engine, n_days=5):
         log_print(f"  Compound Total  : {(compound_equity - 1):.2%}")
     else:
         log_print("No active trades in the selected period.")
-    log_print("="*60 + "\n")
+    log_print("="*30 + "\n")
 
     # 发送钉钉消息
     if DINGTALK_WEBHOOK:
