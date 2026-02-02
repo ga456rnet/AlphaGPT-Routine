@@ -1056,8 +1056,6 @@ def _fetch_margin_data_from_api(stock_code, date_list, cache_dir):
     return margin_data
 
 if __name__ == "__main__":
-    global INDEX_CODE, BEST_FORMULA
-
     CODE_FORMULA = _get_env('CODE_FORMULA', '')       # 组合环境变量 (code:formula)
     cf_list = CODE_FORMULA.split('\n')
     for cf in cf_list:
