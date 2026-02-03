@@ -57,8 +57,8 @@ def send_dingtalk_msg(text):
 
     headers = {'Content-Type': 'application/json'}
     data = {
-        "msgtype": "text",
-        "text": {
+        "msgtype": "markdown",
+        "markdown": {
             "content": text
         }
     }
