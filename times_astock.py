@@ -16,22 +16,23 @@ import time
 import urllib.parse
 import json
 import requests
+import sqlite3
 
 def _get_env(key, default, cast_type=str):
     val = os.environ.get(key)
     if val is None: return default
     if cast_type == bool:
-        return val.lower() in ('true', '1', 't', 'y', 'yes')
+        return val.lower() in ('true', 'yes') # 布尔值支持多种写法
     return cast_type(val)
 
 INDEX_CODE = _get_env('INDEX_CODE', '000001')
-START_DATE = _get_env('START_DATE', '20240101') # 训练数据开始
+START_DATE = _get_env('START_DATE', '20160101') # 训练数据开始：近10年
 END_DATE = _get_env('END_DATE', '20270101') # 训练数据结束
 BATCH_SIZE = _get_env('BATCH_SIZE', 1024, int)
 TRAIN_ITERATIONS = _get_env('TRAIN_ITERATIONS', 100, int)
 MAX_SEQ_LEN = _get_env('MAX_SEQ_LEN', 10, int)
 COST_RATE = _get_env('COST_RATE', 0.0004, float)
-LAST_NDAYS = _get_env('LAST_NDAYS', 50, int)      # 用于展示最近交易日的数量
+LAST_NDAYS = _get_env('LAST_NDAYS', 42, int)      # 用于展示最近交易日的数量（默认42个交易日，约2个月）
 HOLD_PERIOD = _get_env('HOLD_PERIOD', 11, int)     # 持仓周期（包含买入当天后的第2..第HOLD_PERIOD天作为卖出候选）
 FORCE_TRAIN = _get_env('FORCE_TRAIN', False, bool)  # 若为False且存在本地公式，则直接加载；若为True则强制重新训练
 ONLY_LONG = _get_env('ONLY_LONG', True, bool)     # 是否仅做多，适配A股市场
@@ -141,7 +142,7 @@ class DataEngine:
     def __init__(self):
         pass
     def load(self):
-        print(f"Fetching {INDEX_CODE}...")
+        print(f"Fetching Data of {INDEX_CODE}...")
 
         df = ak.stock_zh_a_hist(symbol=INDEX_CODE, period="daily", start_date=START_DATE, end_date=END_DATE, adjust="qfq")
         if df is None or df.empty:
@@ -453,8 +454,8 @@ class DeepQuantMiner:
                 f_val = self.solve_one(encoded_tokens)
                 if f_val is not None:
                     self.best_sharpe = self.backtest(f_val.unsqueeze(0))[0].item()
-                print(f"解析环境变量公式: {BEST_FORMULA}")
-                print(f"   BestSortino: {self.best_sharpe:.3f}")
+                # print(f"解析环境变量公式: {BEST_FORMULA}")
+                # print(f"   BestSortino: {self.best_sharpe:.3f}")
                 return
         else:
             print("没有提供公式，退出")
@@ -752,9 +753,9 @@ def show_latest_positions(miner, engine, n_days=5):
         print(msg)
         output_lines.append(msg)
 
-    log_print("\n" + "="*30)
+    log_print("\n" + "="*40)
     log_print(f"Latest {n_days} Trading Days Position Info")
-    log_print("="*30)
+    log_print("="*40)
     
     if miner.best_formula_tokens is None:
         log_print("No valid formula available")
@@ -797,15 +798,15 @@ def show_latest_positions(miner, engine, n_days=5):
     n_display = min(n_days, len(test_dates))
     start_idx = len(test_dates) - n_display
     
-    log_print(f"\n{'Date':<12} {'Position':<10} {'Return':<12} {'D1_Open':<12} {'ExitOff':<8} {'ExitOpen':<9}")
-    log_print("-" * 72)
-    
     # 用于统计总回报率和投资次数
     simple_sum_return = 0.0
     compound_equity = 1.0
     valid_days = 0
     investment_count = 0  # position=1的次数
     profit_count = 0      # position=1且收益>0的次数
+    
+    # 用于发送钉钉的 Markdown 格式行列表
+    markdown_lines = []
     
     for i in range(start_idx, len(test_dates)):
         date_str = test_dates.iloc[i].strftime('%Y-%m-%d')
@@ -844,7 +845,7 @@ def show_latest_positions(miner, engine, n_days=5):
                 # 根据仓位优先选择第一个符合盈利条件的天：
                 # - 如果 pos_value == 1（多头），选择第一个 r > 0
                 # - 如果 pos_value == -1（空头），选择第一个 r < 0
-                # 否则（无仓位或无法判断）不提前退出，回退到周期最后一天
+                # - 如果 pos_value == 0（无仓位），也按正收益逻辑选择（反映潜在收益）
                 if pos_value == 1:
                     for idx_r, r in enumerate(r_list):
                         if r is not None and r > 0:
@@ -854,6 +855,12 @@ def show_latest_positions(miner, engine, n_days=5):
                 elif pos_value == -1:
                     for idx_r, r in enumerate(r_list):
                         if r is not None and r < 0:
+                            chosen_ret = r
+                            chosen_offset = idx_r + 2
+                            break
+                else:  # pos_value == 0，无仓位时也按正收益逻辑选择
+                    for idx_r, r in enumerate(r_list):
+                        if r is not None and r > 0:
                             chosen_ret = r
                             chosen_offset = idx_r + 2
                             break
@@ -890,22 +897,62 @@ def show_latest_positions(miner, engine, n_days=5):
         
         # 计算退出信息（统一逻辑，优先选择第一个正收益，否则取最后一个有效候选）
         exit_offset = 'N/A'
+        exit_date = 'N/A'
         exit_open = 'N/A'
         if t1 is not None and t1 != 0:
             # 已在上文计算 r_list、chosen_ret、chosen_offset
             if 'chosen_offset' in locals() and chosen_offset is not None:
                 exit_offset = chosen_offset
                 exit_idx = full_idx + chosen_offset
+                # 计算退出日期
+                exit_date_idx = i + chosen_offset
+                if exit_date_idx < len(test_dates):
+                    exit_date = test_dates.iloc[exit_date_idx].strftime('%Y-%m-%d')
                 exit_open = f"{all_open[exit_idx]:.3f}" if exit_idx < len(all_open) else 'N/A'
             else:
                 # 回退策略：如果没有选到，则取最后一个可用
                 exit_offset = HOLD_PERIOD
                 exit_idx = full_idx + HOLD_PERIOD
+                # 计算退出日期
+                exit_date_idx = i + HOLD_PERIOD
+                if exit_date_idx < len(test_dates):
+                    exit_date = test_dates.iloc[exit_date_idx].strftime('%Y-%m-%d')
                 exit_open = f"{all_open[exit_idx]:.3f}" if exit_idx < len(all_open) else 'N/A'
 
-        log_print(f"{date_str:<12} {pos_value:<10.0f} {ret_str:<12} {d1_open:<13} {exit_offset:<8} {exit_open:<9}")
+        # 构建 Markdown 格式的行
+        if i < len(test_ret):
+            ret_value = test_ret[i]
+            # 根据收益值选择颜色：正收益红色（涨），负收益绿色（跌），零为黑色
+            if ret_value > 0:
+                color = "#FF0000"  # 红色表示涨
+                ret_display = f"+{ret_value:.2%}"
+            elif ret_value < 0:
+                color = "#008000"  # 绿色表示跌
+                ret_display = f"{ret_value:.2%}"
+            else:
+                color = "#000000"  # 黑色表示平
+                ret_display = "0.00%"
+            
+            # 根据仓位构建信息
+            pos_info = f"持仓: {int(pos_value)}"
+            entry_info = f"入场: {d1_open}"
+            
+            if exit_date != 'N/A' and exit_date != date_str:
+                exit_info = f"离场: {exit_open} ({exit_date.split('-')[1]}-{exit_date.split('-')[2]})"
+            else:
+                exit_info = f"持仓天数: {int(chosen_offset) if chosen_offset and chosen_offset != 'N/A' else 'N/A'}"
+            
+            markdown_line = f"📅 {date_str} {pos_info} | 收益: <font color=\"{color}\">{ret_display}</font> {entry_info} | {exit_info}"
+            markdown_lines.append(markdown_line)
+        
+        # 保持原有的日志打印（不含表头和分隔线）
+        if i == start_idx:
+            log_print(f"\n{'Date':<12} {'Position':<10} {'Return':<12} {'D1_Open':<12} {'ExitOff':<8} {'ExitDate':<12} {'ExitOpen':<9}")
+            log_print("-" * 82)
+        log_print(f"{date_str:<12} {pos_value:<10.0f} {ret_str:<12} {d1_open:<13} {exit_offset:<8} {exit_date:<12} {exit_open:<9}")
 
-    log_print("-" * 72)
+    log_print("-" * 82)
+    log_print("\n" + "="*30)
     if valid_days > 0 and investment_count > 0:
         win_rate = profit_count / investment_count
         log_print(f"Summary over these {valid_days} days:")
@@ -918,9 +965,24 @@ def show_latest_positions(miner, engine, n_days=5):
         log_print("No active trades in the selected period.")
     log_print("="*30 + "\n")
 
-    # 发送钉钉消息
+    # 发送钉钉消息（Markdown 格式）
     if DINGTALK_WEBHOOK:
-        full_msg = f"AlphaGPT Strategy [{INDEX_CODE}]\n" + "\n".join(output_lines)
+        # 构建 Markdown 格式的钉钉消息
+        dingtalk_msg_lines = [f"## 📊 AlphaGPT Strategy [{INDEX_CODE}]", ""]
+        dingtalk_msg_lines.extend(markdown_lines)
+        dingtalk_msg_lines.append("")
+        dingtalk_msg_lines.append("### 📈 Summary")
+        if valid_days > 0 and investment_count > 0:
+            win_rate = profit_count / investment_count
+            dingtalk_msg_lines.append(f"- **投资次数**: {investment_count}")
+            dingtalk_msg_lines.append(f"- **盈利次数**: {profit_count}")
+            dingtalk_msg_lines.append(f"- **胜率**: {win_rate:.2%}")
+            dingtalk_msg_lines.append(f"- **简单收益**: {simple_sum_return:.2%}")
+            dingtalk_msg_lines.append(f"- **复合收益**: {(compound_equity - 1):.2%}")
+        else:
+            dingtalk_msg_lines.append("无有效交易")
+        
+        full_msg = "\n".join(dingtalk_msg_lines)
         send_dingtalk_msg(full_msg)
 
 
@@ -964,6 +1026,13 @@ def get_margin_balance(stock_code, date_list):
         else:
             missing_dates.append(date)
     
+    # 过滤掉今天的日期
+    today = datetime.today().strftime('%Y%m%d')
+    missing_dates = [d for d in missing_dates if d != today]
+    
+    print("Margin data missing dates: ", missing_dates)
+
+
     # 获取缺失的日期数据
     if missing_dates:
         print(f"Checking trading days and fetching margin data for {len(missing_dates)} missing dates...")
@@ -999,9 +1068,10 @@ def get_margin_balance(stock_code, date_list):
     short_balance_tensor = torch.tensor(short_balance, dtype=torch.float32, device=DEVICE)
 
     print(f"Successfully processed {len(margin_data)} trading days for {stock_code}")
-    print(f"Tensor lengths: {len(financing_balance)}")
-    print(f"Margin Data - First Day ({date_list[0]}): F_Balance={financing_balance[0]:.0f}, S_Balance={short_balance[0]:.0f}")
-    print(f"Margin Data - Last Day  ({date_list[-1]}): F_Balance={financing_balance[-1]:.0f}, S_Balance={short_balance[-1]:.0f}")
+    # print(f"Tensor lengths: {len(financing_balance)}")
+    if financing_buy:
+        print(f"Margin Data - First Day ({date_list[0]}): 融资买入={financing_buy[0]:.0f}, 融资偿还={financing_repay[0]:.0f}")
+        print(f"Margin Data - Last Day  ({date_list[-2]}): 融资买入={financing_buy[-2]:.0f}, 融资偿还={financing_repay[-2]:.0f}")
 
     return financing_balance_tensor, financing_buy_tensor, financing_repay_tensor, short_balance_tensor
 
