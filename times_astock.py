@@ -26,7 +26,7 @@ def _get_env(key, default, cast_type=str):
     return cast_type(val)
 
 INDEX_CODE = _get_env('INDEX_CODE', '000001')
-START_DATE = _get_env('START_DATE', '20160101') # 训练数据开始：近10年
+START_DATE = _get_env('START_DATE', '20220101') # 训练数据开始：近10年
 END_DATE = _get_env('END_DATE', '20270101') # 训练数据结束
 BATCH_SIZE = _get_env('BATCH_SIZE', 1024, int)
 TRAIN_ITERATIONS = _get_env('TRAIN_ITERATIONS', 100, int)
@@ -59,7 +59,8 @@ def send_dingtalk_msg(text):
     data = {
         "msgtype": "markdown",
         "markdown": {
-            "content": text
+            "title": "AlphaGPT Strategy Notification",
+            "text": text
         }
     }
     try:
@@ -457,9 +458,6 @@ class DeepQuantMiner:
                 # print(f"解析环境变量公式: {BEST_FORMULA}")
                 # print(f"   BestSortino: {self.best_sharpe:.3f}")
                 return
-        else:
-            print("没有提供公式，退出")
-            return
 
         # 检查是否需要加载本地公式
         if not FORCE_TRAIN:
@@ -942,7 +940,7 @@ def show_latest_positions(miner, engine, n_days=5):
             else:
                 exit_info = f"持仓天数: {int(chosen_offset) if chosen_offset and chosen_offset != 'N/A' else 'N/A'}"
             
-            markdown_line = f"📅 {date_str} {pos_info} | 收益: <font color=\"{color}\">{ret_display}</font> {entry_info} | {exit_info}"
+            markdown_line = f"- 📅 {date_str} {pos_info} | 收益: <font color=\"{color}\">{ret_display}</font> {entry_info} | {exit_info}"
             markdown_lines.append(markdown_line)
         
         # 保持原有的日志打印（不含表头和分隔线）
@@ -1125,18 +1123,27 @@ def _fetch_margin_data_from_api(stock_code, date_list, cache_dir):
     
     return margin_data
 
+def main(realitytest=False):
+    eng = DataEngine()
+    eng.load()
+    miner = DeepQuantMiner(eng)
+    miner.train()
+    if realitytest:
+        final_reality_check(miner, eng)
+
+    show_latest_positions(miner, eng, n_days=LAST_NDAYS)
+
 if __name__ == "__main__":
     CODE_FORMULA = _get_env('CODE_FORMULA', '')       # 组合环境变量 (code:formula)
-    cf_list = CODE_FORMULA.split('\n')
-    for cf in cf_list:
-        parts = cf.split(':', 1)
-        INDEX_CODE = parts[0]
-        BEST_FORMULA = parts[1]
-        print("code: " + INDEX_CODE + ", len of formula: " + str(len(BEST_FORMULA)))
 
-        eng = DataEngine()
-        eng.load()
-        miner = DeepQuantMiner(eng)
-        miner.train()
-        # final_reality_check(miner, eng)
-        show_latest_positions(miner, eng, n_days=LAST_NDAYS)
+    if not CODE_FORMULA:
+        main(realitytest=True)
+    else:
+        cf_list = CODE_FORMULA.split('\n')
+        for cf in cf_list:
+            parts = cf.split(':', 1)
+            INDEX_CODE = parts[0]
+            BEST_FORMULA = parts[1]
+            print("code: " + INDEX_CODE + ", len of formula: " + str(len(BEST_FORMULA)))
+
+            main(realitytest=False)
