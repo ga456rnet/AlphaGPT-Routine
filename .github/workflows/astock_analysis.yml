@@ -47,3 +47,5 @@ jobs:
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
           git add margin_balance/*.parquet
           git diff --quiet && git diff --staged --quiet || (git commit -m "Update margin data [skip ci]" && git push)
+      - name: Read latest factors
+        run: python main/read_latest_factors.py
