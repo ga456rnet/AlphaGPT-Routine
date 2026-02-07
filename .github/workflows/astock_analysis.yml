@@ -48,4 +48,4 @@ jobs:
           git add margin_balance/*.parquet
           git diff --quiet && git diff --staged --quiet || (git commit -m "Update margin data [skip ci]" && git push)
       - name: Print results
-        run:  python main/print_results.py
+        run:  python print_results.py
